@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Canvas RSS Reader - Attune</title>
+    <style>
+        :root {
+            --main-height: 95vh;
+            --nav-height: 5vh;
+            --bg-dark: #1a1a1a;
+        }
+
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
+            background: var(--bg-dark);
+        }
+
+        main {
+            height: var(--main-height);
+            width: 100vw;
+            position: relative;
+            perspective: 1080px;
+        }
+
+        footer {
+            height: var(--nav-height);
+            width: 100vw;
+            background: #333;
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            color: rgb(240, 240, 240);
+            z-index: 100;
+        }
+
+        .article-container {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: none;
+            background: black;
+            overflow: hidden; /* Ensures zoomed image doesn't spill out */
+        }
+
+        .article-container.active {
+            display: block;
+        }
+
+        /* Moving and Zooming Background Effect */
+        .media-bg {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: scale(1.1); /* Base scale to prevent white edges during move */
+            animation: kenBurns 20s ease-in-out infinite alternate;
+        }
+
+        @keyframes kenBurns {
+            0% {
+                transform: scale(1.1) translate(0, 0);
+            }
+            100% {
+                transform: scale(1.3) translate(-2%, -2%);
+            }
+        }
+
+        .content-overlay {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            max-height: 100%;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.8) 60%, black);
+            color: rgb(240, 240, 240);
+            line-height: 1.6;
+            padding: 20px;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+
+        #type-title {
+            color: #f7ce46;
+            text-align: justify;
+            font-size: 1.7rem;
+            padding: 0 10px;
+            border-radius: 4px;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.7) 0%, hwb(0 0% 100% / 0.5));
+        }
+
+        #type-desc {
+            color: #333;
+            text-align: justify;
+            font-size: 1.2rem;
+            overflow-y: scroll;
+            scrollbar-width: none;
+            padding: 10px;
+            border-radius: 4px;
+            background: #eeeeee98;
+        }
+
+        .highlight-word {
+            color: #d32f2f;
+            font-weight: bold;
+            background: yellow;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 5;
+            touch-action: none;
+        }
+
+        .nav-btn {
+            background: #444;
+            border: 1px solid #666;
+            color: white;
+            padding: 5px 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: bolder;
+        }
+
+        input[type="color"] {
+            border: none;
+            width: 25px;
+            height: 25px;
+            cursor: pointer;
+            border-radius: 15px;
+        }
+
+        .slide-up {
+            animation: slideUp 0.6s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                transform: translateY(100%);
+            }
+            to {
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <main id="app-main"></main>
+
+    <footer>
+        <div class="nav-group">
+            <button class="nav-btn" onclick="prevArticle()">Prev</button>
+            <button id="pauseBtn" class="nav-btn" onclick="togglePause()">Pause</button>
+            <button class="nav-btn" onclick="nextArticle()">Next</button>
+        </div>
+
+        <div class="nav-group">
+            <input type="color" id="penColor" value="#f7ce46" title="Pen Color">
+            <button class="nav-btn" onclick="setTool('pen')">P</button>
+            <button class="nav-btn" onclick="setTool('highlighter')">H</button>
+            <button class="nav-btn" onclick="setTool('eraser')">E</button>
+        </div>
+
+        <div class="nav-group">
+            <button class="nav-btn" onclick="undo()">U</button>
+            <button class="nav-btn" onclick="clearCanvas()">C</button>
+        </div>
+    </footer>
+
+    <script>
+        const feeds = [
+            "https://timesofindia.indiatimes.com/rssfeeds/-2128816011.cms",
+            "https://www.thehindu.com/feeder/default.rss",
+            "https://www.thehindu.com/news/national/feeder/default.rss",
+            "https://www.thehindu.com/opinion/editorial/feeder/default.rss",
+            "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+            "https://timesofindia.indiatimes.com/rssfeedmostrecent.cms",
+            "https://timesofindia.indiatimes.com/rssfeeds/-2128936835.cms"
+        ];
+
+        let articles = [];
+        let currentIndex = 0;
+        let isDrawing = false;
+        let ctx;
+        let currentTool = 'pen';
+        let autoTimer;
+        let typewriterId = 0;
+        let isPaused = false;
+        let voices = [];
+
+        const canvasCache = {};
+        const typedCache = new Set();
+
+        window.speechSynthesis.onvoiceschanged = () => {
+            voices = window.speechSynthesis.getVoices();
+        };
+
+        async function fetchFeeds() {
+            for (let url of feeds) {
+                try {
+                    const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`);
+                    const data = await res.json();
+                    articles = [...articles, ...data.items];
+                } catch (e) { console.error("Feed error", e); }
+            }
+            renderArticle(0);
+        }
+
+        function renderArticle(index) {
+            typewriterId++;
+            const currentId = typewriterId;
+
+            clearTimeout(autoTimer);
+            window.speechSynthesis.cancel();
+
+            const main = document.getElementById('app-main');
+            const item = articles[index];
+            if (!item) return;
+
+            const cleanDescription = item.description.replace(/<[^>]*>?/gm, '');
+
+            main.innerHTML = `
+            <div class="article-container active slide-up">
+                <img class="media-bg" src="${item.enclosure?.link || 'https://via.placeholder.com/800x600?text=News'}" />
+                <canvas id="drawingCanvas"></canvas>
+                <div class="content-overlay">
+                    <h2 id="type-title"></h2>
+                    <p id="type-desc"></p>
+                </div>
+            </div>
+        `;
+
+            setupCanvas(index);
+
+            const titleEl = document.getElementById('type-title');
+            const descEl = document.getElementById('type-desc');
+
+            if (typedCache.has(index)) {
+                titleEl.innerHTML = item.title;
+                descEl.innerHTML = cleanDescription;
+                startAutoAdvance();
+            } else {
+                typeWriter(item.title, 'type-title', () => {
+                    typeWriter(cleanDescription, 'type-desc', () => {
+                        typedCache.add(index);
+                        startAutoAdvance();
+                    }, currentId);
+                }, currentId);
+            }
+        }
+
+        function typeWriter(text, elementId, callback, instanceId) {
+            if (!window.speechSynthesis || isPaused) return;
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 1.0;
+            const selectedVoice = voices.find(v => v.lang.includes('en'));
+            if (selectedVoice) utterance.voice = selectedVoice;
+
+            const el = document.getElementById(elementId);
+
+            utterance.onboundary = (event) => {
+                if (instanceId !== typewriterId) return;
+
+                const spoken = text.substring(0, event.charIndex);
+                const word = text.substring(event.charIndex, event.charIndex + event.charLength);
+                const rest = text.substring(event.charIndex + event.charLength);
+
+                el.innerHTML = `${spoken}<span class="highlight-word">${word}</span>${rest}`;
+            };
+
+            utterance.onend = () => {
+                if (instanceId !== typewriterId) return;
+                el.innerHTML = text; 
+                if (callback) callback();
+            };
+
+            window.speechSynthesis.speak(utterance);
+        }
+
+        function togglePause() {
+            isPaused = !isPaused;
+            const btn = document.getElementById('pauseBtn');
+            const bgImage = document.querySelector('.media-bg');
+            
+            btn.innerHTML = isPaused ? "Play" : "Pause";
+            btn.style.background = isPaused ? "#800" : "#444";
+
+            if (isPaused) {
+                clearTimeout(autoTimer);
+                window.speechSynthesis.pause();
+                if (bgImage) bgImage.style.animationPlayState = 'paused';
+            } else {
+                window.speechSynthesis.resume();
+                if (bgImage) bgImage.style.animationPlayState = 'running';
+                if (typedCache.has(currentIndex)) startAutoAdvance();
+            }
+        }
+
+        function startAutoAdvance() {
+            clearTimeout(autoTimer);
+            if (!isPaused) {
+                autoTimer = setTimeout(() => nextArticle(), 3000);
+            }
+        }
+
+        function setupCanvas(index) {
+            const canvas = document.getElementById('drawingCanvas');
+            ctx = canvas.getContext('2d');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight * 0.9;
+
+            if (canvasCache[index]) ctx.putImageData(canvasCache[index], 0, 0);
+
+            canvas.addEventListener('mousedown', () => clearTimeout(autoTimer));
+            canvas.addEventListener('touchstart', () => clearTimeout(autoTimer));
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('touchstart', (e) => startDrawing(e.touches[0]));
+            canvas.addEventListener('touchmove', (e) => { e.preventDefault(); draw(e.touches[0]); }, { passive: false });
+            canvas.addEventListener('touchend', stopDrawing);
+        }
+
+        function startDrawing(e) {
+            isDrawing = true;
+            ctx.beginPath();
+            const rect = ctx.canvas.getBoundingClientRect();
+            ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            const rect = ctx.canvas.getBoundingClientRect();
+            ctx.lineWidth = currentTool === 'highlighter' ? 20 : 3;
+            ctx.lineCap = 'round';
+            ctx.globalAlpha = currentTool === 'highlighter' ? 0.3 : 1.0;
+            ctx.globalCompositeOperation = currentTool === 'eraser' ? 'destination-out' : 'source-over';
+            if (currentTool !== 'eraser') ctx.strokeStyle = document.getElementById('penColor').value;
+
+            ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+            ctx.stroke();
+        }
+
+        function stopDrawing() {
+            isDrawing = false;
+            canvasCache[currentIndex] = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+        }
+
+        function setTool(tool) { currentTool = tool; }
+        function undo() { clearCanvas(); }
+        function clearCanvas() {
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            delete canvasCache[currentIndex];
+        }
+
+        function nextArticle() {
+            if (currentIndex < articles.length - 1) {
+                currentIndex++;
+                renderArticle(currentIndex);
+            } else {
+                location.reload();
+            }
+        }
+
+        function prevArticle() {
+            if (currentIndex > 0) {
+                currentIndex--;
+                renderArticle(currentIndex);
+            }
+        }
+
+        fetchFeeds();
+    </script>
+</body>
+
+</html>
