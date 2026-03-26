@@ -14,9 +14,6 @@
 
         body,
         html {
-            height: 100dvh;
-            display: flex;
-            flex-direction: column;
             margin: 0;
             padding: 0;
             overflow: hidden;
@@ -29,15 +26,10 @@
             width: 100vw;
             position: relative;
             perspective: 1080px;
-            flex: 1;
-            /* Takes exactly what is left */
-            overflow: hidden;
         }
 
         footer {
-            height: 60px;
-            /* Use pixels for footer on iPad for better tap targets */
-            flex-shrink: 0;
+            height: var(--nav-height);
             width: 100vw;
             background: #333;
             display: flex;
@@ -53,35 +45,16 @@
             height: 100%;
             display: none;
             background: black;
-            overflow: hidden;
-            /* Ensures zoomed image doesn't spill out */
         }
 
         .article-container.active {
             display: block;
         }
 
-        /* Moving and Zooming Background Effect */
         .media-bg {
             width: 100%;
             height: 100%;
             object-fit: cover;
-            position: absolute;
-            top: 0;
-            left: 0;
-            transform: scale(1.1);
-            /* Base scale to prevent white edges during move */
-            animation: kenBurns 20s ease-in-out infinite alternate;
-        }
-
-        @keyframes kenBurns {
-            0% {
-                transform: scale(1.1) translate(0, 0);
-            }
-
-            100% {
-                transform: scale(1.3) translate(-2%, -2%);
-            }
         }
 
         .content-overlay {
@@ -117,6 +90,7 @@
             background: #eeeeee98;
         }
 
+        /* Highlight the currently spoken word */
         .highlight-word {
             color: #d32f2f;
             font-weight: bold;
@@ -174,7 +148,7 @@
     <footer>
         <div class="nav-group">
             <button class="nav-btn" onclick="prevArticle()">Prev</button>
-            <button id="pauseBtn" class="nav-btn" onclick="togglePause()">Pas</button>
+            <button id="pauseBtn" class="nav-btn" onclick="togglePause()">Pause</button>
             <button class="nav-btn" onclick="nextArticle()">Next</button>
         </div>
 
@@ -286,16 +260,18 @@
             utterance.onboundary = (event) => {
                 if (instanceId !== typewriterId) return;
 
+                // Slice text up to current boundary
                 const spoken = text.substring(0, event.charIndex);
                 const word = text.substring(event.charIndex, event.charIndex + event.charLength);
                 const rest = text.substring(event.charIndex + event.charLength);
 
+                // Integrate requested word highlighting
                 el.innerHTML = `${spoken}<span class="highlight-word">${word}</span>${rest}`;
             };
 
             utterance.onend = () => {
                 if (instanceId !== typewriterId) return;
-                el.innerHTML = text;
+                el.innerHTML = text; // Clear highlight at the end
                 if (callback) callback();
             };
 
@@ -305,18 +281,14 @@
         function togglePause() {
             isPaused = !isPaused;
             const btn = document.getElementById('pauseBtn');
-            const bgImage = document.querySelector('.media-bg');
-
             btn.innerHTML = isPaused ? "Play" : "Pause";
             btn.style.background = isPaused ? "#800" : "#444";
 
             if (isPaused) {
                 clearTimeout(autoTimer);
                 window.speechSynthesis.pause();
-                if (bgImage) bgImage.style.animationPlayState = 'paused';
             } else {
                 window.speechSynthesis.resume();
-                if (bgImage) bgImage.style.animationPlayState = 'running';
                 if (typedCache.has(currentIndex)) startAutoAdvance();
             }
         }
@@ -331,21 +303,19 @@
         function setupCanvas(index) {
             const canvas = document.getElementById('drawingCanvas');
             ctx = canvas.getContext('2d');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight * 0.9;
 
-            // Match the actual displayed size of the main element
-            canvas.width = canvas.parentElement.clientWidth;
-            canvas.height = canvas.parentElement.clientHeight;
+            if (canvasCache[index]) ctx.putImageData(canvasCache[index], 0, 0);
 
-            // Critical for iPad: prevent default scrolling while drawing
-            canvas.addEventListener('touchstart', (e) => {
-                if (isPaused) e.preventDefault();
-                startDrawing(e.touches[0]);
-            }, { passive: false });
-
-            canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                draw(e.touches[0]);
-            }, { passive: false });
+            canvas.addEventListener('mousedown', () => clearTimeout(autoTimer));
+            canvas.addEventListener('touchstart', () => clearTimeout(autoTimer));
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('touchstart', (e) => startDrawing(e.touches[0]));
+            canvas.addEventListener('touchmove', (e) => { e.preventDefault(); draw(e.touches[0]); }, { passive: false });
+            canvas.addEventListener('touchend', stopDrawing);
         }
 
         function startDrawing(e) {
