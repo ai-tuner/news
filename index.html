@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Canvas RSS Reader - Attune</title>
+    <title>Canvas RSS Reader</title>
     <style>
         :root {
             --bg-dark: #1a1a1a;
@@ -21,6 +21,20 @@
             font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
             background: var(--bg-dark);
             overscroll-behavior: none;
+        }
+
+        /* Interaction Overlay to fix Auto-play blocks */
+        #start-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            color: white;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
         }
 
         main {
@@ -76,8 +90,8 @@
         }
 
         @keyframes kenBurns {
-            0% { transform: scale(1.2) translate(0, 0); }
-            100% { transform: scale(1.4) translate(-3%, -3%); }
+            0% { transform: scale(1.0) translate(0, 0); }
+            100% { transform: scale(1.5) translate(-10%, -10%); }
         }
 
         .content-overlay {
@@ -90,7 +104,6 @@
             
             padding: 20px;
             box-sizing: border-box;
-            /* CRITICAL: Allow clicks to pass through to canvas */
             pointer-events: none; 
             z-index: 10;
             display: flex;
@@ -104,7 +117,6 @@
             font-size: 1.4rem;
             margin-bottom: 10px;
             text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-            /* Ensure title doesn't block drawing */
             pointer-events: none;
             line-height: 1.4;
         }
@@ -119,7 +131,6 @@
             padding: 10px;
             background: rgba(0, 0, 0, 0.5);
             border-radius: 8px;
-            /* Allow scrolling if text is long, but this will block ink on this specific box */
             pointer-events: auto; 
             line-height: 1.6;
         }
@@ -136,7 +147,6 @@
             position: absolute;
             top: 0;
             left: 0;
-            /* Place canvas high enough to be seen but under UI if needed */
             z-index: 15; 
             touch-action: none;
             width: 100%;
@@ -173,13 +183,18 @@
 
         @media (min-width: 768px) {
             #type-title { font-size: 2.2rem; }
-            #type-desc { font-size: 1.3rem; max-height: 400px; }
+            #type-desc { font-size: 1.3rem; max-height: 100%; }
             .nav-btn { padding: 12px 18px; font-size: 1rem; }
         }
     </style>
 </head>
 
 <body>
+
+    <div id="start-overlay">
+        <h1>News</h1>
+        <button class="nav-btn" style="font-size: 1.5rem; padding: 15px 30px;" onclick="initApp()">Start Reading</button>
+    </div>
 
     <main id="app-main"></main>
 
@@ -223,6 +238,7 @@
         let typewriterId = 0;
         let isPaused = false;
         let voices = [];
+        let isInitialized = false;
 
         const canvasCache = {};
         const typedCache = new Set();
@@ -230,6 +246,16 @@
         window.speechSynthesis.onvoiceschanged = () => {
             voices = window.speechSynthesis.getVoices();
         };
+
+        // Added Init function to trigger on user click
+        function initApp() {
+            document.getElementById('start-overlay').style.display = 'none';
+            isInitialized = true;
+            // Dummy utterance to "unlock" speech on mobile
+            const unlock = new SpeechSynthesisUtterance("");
+            window.speechSynthesis.speak(unlock);
+            fetchFeeds();
+        }
 
         async function fetchFeeds() {
             for (let url of feeds) {
@@ -253,7 +279,6 @@
             const item = articles[index];
             if (!item) return;
 
-            // Use content fallback and remove character limits
             const fullRawText = item.content || item.description || "";
             const cleanDescription = fullRawText.replace(/<[^>]*>?/gm, '').trim();
 
@@ -273,9 +298,11 @@
             const titleEl = document.getElementById('type-title');
             const descEl = document.getElementById('type-desc');
 
+            // Set text immediately to fix mobile "delayed display" issue
+            titleEl.innerText = item.title;
+            descEl.innerText = cleanDescription;
+
             if (typedCache.has(index)) {
-                titleEl.innerHTML = item.title;
-                descEl.innerHTML = cleanDescription;
                 startAutoAdvance();
             } else {
                 typeWriter(item.title, 'type-title', () => {
@@ -292,13 +319,14 @@
 
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.rate = 1.0;
-            const selectedVoice = voices.find(v => v.lang.includes('en')) || voices[0];
+            const selectedVoice = voices.find(v => v.lang.includes('en-IN')) || voices[0];
             if (selectedVoice) utterance.voice = selectedVoice;
 
             const el = document.getElementById(elementId);
 
             utterance.onboundary = (event) => {
                 if (instanceId !== typewriterId) return;
+                // Highlighting logic
                 const spoken = text.substring(0, event.charIndex);
                 const word = text.substring(event.charIndex, event.charIndex + event.charLength);
                 const rest = text.substring(event.charIndex + event.charLength);
@@ -308,6 +336,13 @@
 
             utterance.onend = () => {
                 if (instanceId !== typewriterId) return;
+                el.innerHTML = text; // Clean up spans
+                if (callback) callback();
+            };
+
+            // Error handler to prevent hang on mobile
+            utterance.onerror = () => {
+                if (instanceId !== typewriterId) return;
                 el.innerHTML = text;
                 if (callback) callback();
             };
@@ -316,6 +351,7 @@
         }
 
         function togglePause() {
+            if (!isInitialized) return;
             isPaused = !isPaused;
             const btn = document.getElementById('pauseBtn');
             const bgImage = document.querySelector('.media-bg');
@@ -360,9 +396,7 @@
             };
 
             const onStart = (e) => {
-                // If the user starts drawing on the scrollable desc box, let them scroll instead
                 if (e.target.id === 'type-desc') return;
-                
                 isDrawing = true;
                 clearTimeout(autoTimer);
                 const pos = getPos(e);
@@ -432,9 +466,6 @@
                 renderArticle(currentIndex);
             }
         }
-
-        fetchFeeds();
     </script>
 </body>
-
 </html>
