@@ -12,7 +12,6 @@
 
         body,
         html {
-            /* Use dvh to ensure iPad Safari navigation bars don't hide the footer */
             height: 100dvh;
             display: flex;
             flex-direction: column;
@@ -21,20 +20,20 @@
             overflow: hidden;
             font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
             background: var(--bg-dark);
+            overscroll-behavior: none;
         }
 
         main {
-            /* Flex-grow ensures main takes all space except the footer */
             flex: 1;
             width: 100vw;
             position: relative;
             perspective: 1080px;
             overflow: hidden;
+            background: #000;
         }
 
         footer {
-            /* Fixed height in pixels is more reliable for iPad tap targets */
-            height: 60px;
+            height: 50px;
             flex-shrink: 0;
             width: 100vw;
             background: #333;
@@ -43,6 +42,13 @@
             justify-content: space-around;
             color: rgb(240, 240, 240);
             z-index: 1000;
+            padding: 5px;
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 5px;
+            align-items: center;
         }
 
         .article-container {
@@ -78,39 +84,48 @@
             position: absolute;
             bottom: 0;
             width: 100%;
-            max-height: 100%;
-            background: linear-gradient(transparent, rgba(0, 0, 0, 0.8) 60%, black);
+            max-height: 85%;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.8) 20%, black);
             color: rgb(240, 240, 240);
-            line-height: 1.6;
+            line-height: 1.4;
             padding: 20px;
             box-sizing: border-box;
-            pointer-events: none;
+            /* CRITICAL: Allow clicks to pass through to canvas */
+            pointer-events: none; 
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
         }
 
         #type-title {
             color: #f7ce46;
-            text-align: justify;
-            font-size: 1.7rem;
-            padding: 0 10px;
-            border-radius: 4px;
-            background: linear-gradient(transparent, rgba(0, 0, 0, 0.7) 0%, hwb(0 0% 100% / 0.5));
+            text-align: left;
+            font-size: 1.4rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            /* Ensure title doesn't block drawing */
+            pointer-events: none;
         }
 
         #type-desc {
-            color: #333;
+            color: #eee;
             text-align: justify;
-            font-size: 1.2rem;
-            overflow-y: scroll;
-            scrollbar-width: none;
+            font-size: 1rem;
+            max-height: 250px;
+            overflow-y: auto;
+            scrollbar-width: thin;
             padding: 10px;
-            border-radius: 4px;
-            background: #eeeeee98;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            /* Allow scrolling if text is long, but this will block ink on this specific box */
+            pointer-events: auto; 
         }
 
         .highlight-word {
-            color: #d32f2f;
+            color: #fff;
             font-weight: bold;
-            background: yellow;
+            background: #d32f2f;
             padding: 0 2px;
             border-radius: 2px;
         }
@@ -119,33 +134,45 @@
             position: absolute;
             top: 0;
             left: 0;
-            z-index: 5;
+            /* Place canvas high enough to be seen but under UI if needed */
+            z-index: 15; 
             touch-action: none;
+            width: 100%;
+            height: 100%;
         }
 
         .nav-btn {
             background: #444;
             border: 1px solid #666;
             color: white;
-            padding: 8px 12px;
+            padding: 8px 8px;
             cursor: pointer;
             border-radius: 4px;
             font-weight: bolder;
+            font-size: 0.8rem;
+            min-width: 30px;
         }
 
         input[type="color"] {
             border: none;
-            width: 30px;
-            height: 30px;
+            width: 35px;
+            height: 35px;
             cursor: pointer;
-            border-radius: 15px;
+            border-radius: 50%;
+            background: none;
         }
 
         .slide-up { animation: slideUp 0.6s ease-out; }
 
         @keyframes slideUp {
-            from { transform: translateY(100%); }
-            to { transform: translateY(0); }
+            from { transform: translateY(20%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @media (min-width: 768px) {
+            #type-title { font-size: 2.2rem; }
+            #type-desc { font-size: 1.3rem; max-height: 400px; }
+            .nav-btn { padding: 12px 18px; font-size: 1rem; }
         }
     </style>
 </head>
@@ -156,9 +183,9 @@
 
     <footer>
         <div class="nav-group">
-            <button class="nav-btn" onclick="prevArticle()">Prev</button>
+            <button class="nav-btn" onclick="prevArticle()">Prv</button>
             <button id="pauseBtn" class="nav-btn" onclick="togglePause()">Pause</button>
-            <button class="nav-btn" onclick="nextArticle()">Next</button>
+            <button class="nav-btn" onclick="nextArticle()">Nxt</button>
         </div>
 
         <div class="nav-group">
@@ -207,10 +234,10 @@
                 try {
                     const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`);
                     const data = await res.json();
-                    articles = [...articles, ...data.items];
+                    if(data.items) articles = [...articles, ...data.items];
                 } catch (e) { console.error("Feed error", e); }
             }
-            renderArticle(0);
+            if(articles.length > 0) renderArticle(0);
         }
 
         function renderArticle(index) {
@@ -224,7 +251,9 @@
             const item = articles[index];
             if (!item) return;
 
-            const cleanDescription = item.description.replace(/<[^>]*>?/gm, '');
+            // Use content fallback and remove character limits
+            const fullRawText = item.content || item.description || "";
+            const cleanDescription = fullRawText.replace(/<[^>]*>?/gm, '').trim();
 
             main.innerHTML = `
             <div class="article-container active slide-up">
@@ -257,11 +286,11 @@
         }
 
         function typeWriter(text, elementId, callback, instanceId) {
-            if (!window.speechSynthesis || isPaused) return;
+            if (isPaused) return;
 
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.rate = 1.0;
-            const selectedVoice = voices.find(v => v.lang.includes('en'));
+            const selectedVoice = voices.find(v => v.lang.includes('en')) || voices[0];
             if (selectedVoice) utterance.voice = selectedVoice;
 
             const el = document.getElementById(elementId);
@@ -272,6 +301,7 @@
                 const word = text.substring(event.charIndex, event.charIndex + event.charLength);
                 const rest = text.substring(event.charIndex + event.charLength);
                 el.innerHTML = `${spoken}<span class="highlight-word">${word}</span>${rest}`;
+                if(elementId === 'type-desc') el.scrollTop = el.scrollHeight;
             };
 
             utterance.onend = () => {
@@ -304,7 +334,7 @@
         function startAutoAdvance() {
             clearTimeout(autoTimer);
             if (!isPaused) {
-                autoTimer = setTimeout(() => nextArticle(), 3000);
+                autoTimer = setTimeout(() => nextArticle(), 8000);
             }
         }
 
@@ -312,64 +342,74 @@
             const canvas = document.getElementById('drawingCanvas');
             ctx = canvas.getContext('2d');
             
-            // Critical for iPad: Measure parent since main is a flex child
-            canvas.width = canvas.parentElement.clientWidth;
-            canvas.height = canvas.parentElement.clientHeight;
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
 
-            if (canvasCache[index]) ctx.putImageData(canvasCache[index], 0, 0);
+            if (canvasCache[index]) {
+                ctx.putImageData(canvasCache[index], 0, 0);
+            }
 
-            // Desktop events
-            canvas.addEventListener('mousedown', (e) => {
+            const getPos = (e) => {
+                const r = canvas.getBoundingClientRect();
+                const cx = e.touches ? e.touches[0].clientX : e.clientX;
+                const cy = e.touches ? e.touches[0].clientY : e.clientY;
+                return { x: cx - r.left, y: cy - r.top };
+            };
+
+            const onStart = (e) => {
+                // If the user starts drawing on the scrollable desc box, let them scroll instead
+                if (e.target.id === 'type-desc') return;
+                
+                isDrawing = true;
                 clearTimeout(autoTimer);
-                startDrawing(e);
-            });
-            canvas.addEventListener('mousemove', draw);
-            canvas.addEventListener('mouseup', stopDrawing);
+                const pos = getPos(e);
+                ctx.beginPath();
+                ctx.moveTo(pos.x, pos.y);
+            };
 
-            // iPad Specific events
-            canvas.addEventListener('touchstart', (e) => {
-                clearTimeout(autoTimer);
-                // Prevent iPad from trying to scroll while drawing
-                e.preventDefault();
-                startDrawing(e.touches[0]);
+            const onMove = (e) => {
+                if (!isDrawing) return;
+                const pos = getPos(e);
+                ctx.lineWidth = currentTool === 'highlighter' ? 30 : 4;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.globalAlpha = currentTool === 'highlighter' ? 0.3 : 1.0;
+                ctx.globalCompositeOperation = currentTool === 'eraser' ? 'destination-out' : 'source-over';
+                if (currentTool !== 'eraser') ctx.strokeStyle = document.getElementById('penColor').value;
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+            };
+
+            const onEnd = () => {
+                if (isDrawing) {
+                    isDrawing = false;
+                    canvasCache[currentIndex] = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                }
+            };
+
+            canvas.addEventListener('mousedown', onStart);
+            canvas.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onEnd);
+            canvas.addEventListener('touchstart', (e) => { 
+                if (e.target.id !== 'type-desc') {
+                    onStart(e); 
+                    e.preventDefault(); 
+                }
             }, { passive: false });
-
-            canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                draw(e.touches[0]);
+            canvas.addEventListener('touchmove', (e) => { 
+                if (isDrawing) {
+                    onMove(e); 
+                    e.preventDefault(); 
+                }
             }, { passive: false });
-
-            canvas.addEventListener('touchend', stopDrawing);
-        }
-
-        function startDrawing(e) {
-            isDrawing = true;
-            ctx.beginPath();
-            const rect = ctx.canvas.getBoundingClientRect();
-            ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
-        }
-
-        function draw(e) {
-            if (!isDrawing) return;
-            const rect = ctx.canvas.getBoundingClientRect();
-            ctx.lineWidth = currentTool === 'highlighter' ? 20 : 3;
-            ctx.lineCap = 'round';
-            ctx.globalAlpha = currentTool === 'highlighter' ? 0.3 : 1.0;
-            ctx.globalCompositeOperation = currentTool === 'eraser' ? 'destination-out' : 'source-over';
-            if (currentTool !== 'eraser') ctx.strokeStyle = document.getElementById('penColor').value;
-            ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
-            ctx.stroke();
-        }
-
-        function stopDrawing() {
-            if (!isDrawing) return;
-            isDrawing = false;
-            canvasCache[currentIndex] = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+            canvas.addEventListener('touchend', onEnd);
         }
 
         function setTool(tool) { currentTool = tool; }
         function undo() { clearCanvas(); }
         function clearCanvas() {
+            if(!ctx) return;
             ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
             delete canvasCache[currentIndex];
         }
@@ -379,7 +419,8 @@
                 currentIndex++;
                 renderArticle(currentIndex);
             } else {
-                location.reload();
+                currentIndex = 0;
+                renderArticle(0);
             }
         }
 
